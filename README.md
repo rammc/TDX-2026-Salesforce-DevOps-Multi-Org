@@ -235,7 +235,7 @@ The session explores how to structure a single repository to manage metadata acr
 
 Whether you run two orgs or twenty, the patterns in this blueprint scale from sandbox validation all the way to production delivery.
 
-[TrailblazerDX 2026](https://www.salesforce.com/trailblazerdx/)
+[TrailblazerDX 2026](https://reg.salesforce.com/flow/plus/tdx26/sessioncatalog/page/catalog/session/1770914049401001a8hh)
 
 ## Author
 

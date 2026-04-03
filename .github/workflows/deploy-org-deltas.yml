@@ -1,0 +1,253 @@
+# deploy-org-deltas.yml — Org-Specific Delta Deployment Pipeline
+# Deploys org-specific metadata to only the affected regional org(s).
+#
+# Required secrets (per environment):
+#   SF_AUTH_URL       — Salesforce CLI SFDX auth URL for the target org
+#   SLACK_WEBHOOK_URL — (repository secret) Slack incoming webhook for notifications
+#
+# Required GitHub Environments:
+#   production-eu, production-us, production-apac
+# ------------------------------------------------------------------
+name: Deploy Org Deltas
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "orgs/**"
+
+  workflow_call:
+    inputs:
+      orgs:
+        description: "JSON array of orgs to deploy (e.g. [\"eu\",\"us\",\"apac\"])"
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        description: "Run in dry-run / validation-only mode"
+        required: false
+        type: boolean
+        default: false
+    secrets: inherit
+    # Each deploy job runs in a GitHub Environment (production-{region})
+    # that provides its own SF_AUTH_URL secret. No per-org secrets needed.
+
+concurrency:
+  group: deploy-org-deltas-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ------------------------------------------------------------------
+  # Detect which orgs have changes
+  # ------------------------------------------------------------------
+  detect-orgs:
+    name: Detect Changed Orgs
+    runs-on: ubuntu-latest
+    outputs:
+      orgs: ${{ steps.resolve.outputs.orgs }}
+      has_changes: ${{ steps.resolve.outputs.has_changes }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve org list
+        id: resolve
+        run: |
+          # If called as reusable workflow with explicit orgs, use those
+          INPUT_ORGS='${{ inputs.orgs }}'
+          if [ -n "$INPUT_ORGS" ] && [ "$INPUT_ORGS" != "" ]; then
+            echo "orgs=${INPUT_ORGS}" >> "$GITHUB_OUTPUT"
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "Using provided orgs: ${INPUT_ORGS}"
+            exit 0
+          fi
+
+          # Detect from changed files
+          declare -a org_list=()
+          for org in eu us apac; do
+            if git diff --name-only HEAD~1 HEAD -- "orgs/${org}/" | grep -q .; then
+              org_list+=("\"${org}\"")
+            fi
+          done
+
+          if [ ${#org_list[@]} -gt 0 ]; then
+            ORGS="[$(IFS=,; echo "${org_list[*]}")]"
+            echo "orgs=${ORGS}" >> "$GITHUB_OUTPUT"
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo 'orgs=[]' >> "$GITHUB_OUTPUT"
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "Detected orgs: ${ORGS:-[]}"
+
+  # ------------------------------------------------------------------
+  # Deploy to affected orgs in parallel
+  # ------------------------------------------------------------------
+  deploy:
+    name: "Deploy — ${{ matrix.org }}"
+    needs: detect-orgs
+    if: needs.detect-orgs.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        org: ${{ fromJSON(needs.detect-orgs.outputs.orgs) }}
+    environment: "production-${{ matrix.org }}"
+    outputs:
+      result_eu: ${{ steps.set-result.outputs.result_eu }}
+      result_us: ${{ steps.set-result.outputs.result_us }}
+      result_apac: ${{ steps.set-result.outputs.result_apac }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to ${{ matrix.org }} org
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias "${{ matrix.org }}-target" --set-default
+          rm -f auth_url.txt
+
+      - name: Deploy org-specific metadata
+        run: |
+          DRY_RUN_FLAG=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            DRY_RUN_FLAG="--dry-run"
+          fi
+
+          # Deploy all source directories under orgs/<region>/
+          for src_dir in orgs/${{ matrix.org }}/*/; do
+            if [ -d "$src_dir" ]; then
+              echo "::group::Deploying ${src_dir}"
+              sf project deploy start \
+                --source-dir "$src_dir" \
+                --target-org "${{ matrix.org }}-target" \
+                $DRY_RUN_FLAG \
+                --wait 60 \
+                --verbose
+              echo "::endgroup::"
+            fi
+          done
+
+      - name: Set deployment result
+        id: set-result
+        if: always()
+        run: |
+          echo "result_${{ matrix.org }}=${{ job.status }}" >> "$GITHUB_OUTPUT"
+
+  # ------------------------------------------------------------------
+  # Run org-specific smoke tests
+  # ------------------------------------------------------------------
+  smoke-tests:
+    name: "Smoke Test — ${{ matrix.org }}"
+    needs:
+      - detect-orgs
+      - deploy
+    if: needs.deploy.result == 'success'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        org: ${{ fromJSON(needs.detect-orgs.outputs.orgs) }}
+    environment: "production-${{ matrix.org }}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to ${{ matrix.org }} org
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias "${{ matrix.org }}-target" --set-default
+          rm -f auth_url.txt
+
+      - name: Run smoke tests
+        run: |
+          chmod +x scripts/smoke-test.sh
+          scripts/smoke-test.sh "${{ matrix.org }}" "${{ matrix.org }}-target"
+
+  # ------------------------------------------------------------------
+  # Notify Slack
+  # ------------------------------------------------------------------
+  notify:
+    name: Slack Notification
+    needs:
+      - detect-orgs
+      - deploy
+      - smoke-tests
+    if: always() && needs.detect-orgs.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post deployment status to Slack
+        if: env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          DEPLOY_STATUS="${{ needs.deploy.result }}"
+          SMOKE_STATUS="${{ needs.smoke-tests.result }}"
+          ORGS='${{ needs.detect-orgs.outputs.orgs }}'
+
+          if [ "$DEPLOY_STATUS" = "success" ] && [ "$SMOKE_STATUS" = "success" ]; then
+            OVERALL="SUCCESS"
+            COLOR="#36a64f"
+          else
+            OVERALL="FAILED"
+            COLOR="#dc3545"
+          fi
+
+          curl -sfS -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d @- <<PAYLOAD
+          {
+            "attachments": [
+              {
+                "color": "${COLOR}",
+                "blocks": [
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "Org Delta Deployment — ${OVERALL}"
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "fields": [
+                      { "type": "mrkdwn", "text": "*Orgs:* ${ORGS}" },
+                      { "type": "mrkdwn", "text": "*Deploy:* ${DEPLOY_STATUS}" },
+                      { "type": "mrkdwn", "text": "*Smoke Tests:* ${SMOKE_STATUS}" },
+                      { "type": "mrkdwn", "text": "*Ref:* \`${{ github.sha }}\`" }
+                    ]
+                  },
+                  {
+                    "type": "context",
+                    "elements": [
+                      {
+                        "type": "mrkdwn",
+                        "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+          PAYLOAD

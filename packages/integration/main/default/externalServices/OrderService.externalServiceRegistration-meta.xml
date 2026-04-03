@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ExternalServiceRegistration xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>OrderService</fullName>
+    <label>Order Service</label>
+    <description>External service registration for the ERP Order Service API. Provides order creation, retrieval, and management operations.</description>
+    <namedCredential>ERP_System</namedCredential>
+    <registrationProviderType>Custom</registrationProviderType>
+    <schema>{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Order Service",
+    "version": "1.0.0",
+    "description": "ERP Order Service API"
+  },
+  "paths": {
+    "/orders": {
+      "get": {
+        "operationId": "getOrders",
+        "summary": "Retrieve orders",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "orderId": { "type": "string" },
+                      "status": { "type": "string" },
+                      "total": { "type": "number" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}</schema>
+    <schemaType>OpenApi3</schemaType>
+    <status>Complete</status>
+    <systemVersion>2</systemVersion>
+</ExternalServiceRegistration>

@@ -1,0 +1,20 @@
+# Ignore list for Salesforce metadata deployments
+
+# Package directories we don't track
+**/jsconfig.json
+**/.eslintrc.json
+
+# LWC test files
+**/__tests__/**
+
+# Profiles — managed via Permission Sets instead
+**/profiles/**
+
+# Community metadata (noisy, UI-managed)
+**/experiences/**
+
+# Scratch org settings
+**/settings/Account.settings-meta.xml
+
+# CI artifacts
+scripts/output/

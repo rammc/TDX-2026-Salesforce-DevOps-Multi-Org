@@ -1,0 +1,22 @@
+# CODEOWNERS — Salesforce DevOps Multi-Org Blueprint
+# Each line maps a file pattern to one or more team owners.
+# The last matching pattern takes precedence.
+
+# Core architecture
+packages/core/                @core-architecture-team
+packages/logic/               @core-architecture-team
+
+# Integration
+packages/integration/         @integration-team
+
+# Regional teams
+orgs/eu/                      @eu-team
+orgs/us/                      @us-team
+orgs/apac/                    @apac-team
+
+# DevOps
+.github/workflows/            @devops-team
+scripts/                      @devops-team
+
+# Shared governance
+config/                       @core-architecture-team @devops-team

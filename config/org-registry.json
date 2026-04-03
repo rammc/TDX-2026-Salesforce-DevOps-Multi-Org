@@ -1,0 +1,46 @@
+{
+  "orgs": [
+    {
+      "alias": "eu-prod",
+      "region": "eu",
+      "label": "PROD EU",
+      "sandbox_alias": "eu-sandbox",
+      "auth_url_secret": "SF_AUTH_URL_EU",
+      "governance": {
+        "required_reviewers": ["eu-compliance-team"],
+        "compliance_framework": "GDPR",
+        "approval_required": true
+      },
+      "packages": ["core", "integration", "logic"],
+      "org_overrides": ["orgs/eu/logic", "orgs/eu/ui"]
+    },
+    {
+      "alias": "us-prod",
+      "region": "us",
+      "label": "PROD US",
+      "sandbox_alias": "us-sandbox",
+      "auth_url_secret": "SF_AUTH_URL_US",
+      "governance": {
+        "required_reviewers": ["us-sox-auditor"],
+        "compliance_framework": "SOX",
+        "approval_required": true
+      },
+      "packages": ["core", "integration", "logic"],
+      "org_overrides": ["orgs/us/logic", "orgs/us/ui"]
+    },
+    {
+      "alias": "apac-prod",
+      "region": "apac",
+      "label": "PROD APAC",
+      "sandbox_alias": "apac-sandbox",
+      "auth_url_secret": "SF_AUTH_URL_APAC",
+      "governance": {
+        "required_reviewers": ["apac-admin"],
+        "compliance_framework": "LOCAL",
+        "approval_required": false
+      },
+      "packages": ["core", "integration", "logic"],
+      "org_overrides": ["orgs/apac/logic", "orgs/apac/ui"]
+    }
+  ]
+}

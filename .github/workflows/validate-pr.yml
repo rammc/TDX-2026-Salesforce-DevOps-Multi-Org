@@ -1,0 +1,280 @@
+# validate-pr.yml — Pull Request Validation Pipeline
+# Validates Salesforce metadata changes against sandbox orgs before merge.
+#
+# Required secrets (per environment):
+#   SF_AUTH_URL  — Salesforce CLI SFDX auth URL for the sandbox org
+#
+# Required GitHub Environments:
+#   eu-sandbox, us-sandbox, apac-sandbox
+# ------------------------------------------------------------------
+name: Validate Pull Request
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  # ------------------------------------------------------------------
+  # 1. Detect which packages and orgs have changed
+  # ------------------------------------------------------------------
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      packages_changed: ${{ steps.detect.outputs.packages_changed }}
+      orgs_changed: ${{ steps.detect.outputs.orgs_changed }}
+      has_shared_changes: ${{ steps.detect.outputs.has_shared_changes }}
+      has_org_changes: ${{ steps.detect.outputs.has_org_changes }}
+      validation_matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run change detection
+        id: detect
+        run: |
+          chmod +x scripts/detect-changes.sh
+          scripts/detect-changes.sh "origin/${{ github.base_ref }}"
+
+      - name: Build validation matrix
+        id: matrix
+        run: |
+          ORGS_CHANGED='${{ steps.detect.outputs.orgs_changed }}'
+          HAS_SHARED='${{ steps.detect.outputs.has_shared_changes }}'
+
+          # If shared packages changed, all orgs need validation
+          if [ "$HAS_SHARED" = "true" ]; then
+            echo 'matrix={"org":["eu","us","apac"]}' >> "$GITHUB_OUTPUT"
+          elif [ "$ORGS_CHANGED" != "[]" ]; then
+            echo "matrix={\"org\":${ORGS_CHANGED}}" >> "$GITHUB_OUTPUT"
+          else
+            echo 'matrix={"org":[]}' >> "$GITHUB_OUTPUT"
+          fi
+
+  # ------------------------------------------------------------------
+  # 2. Validate metadata with dry-run deployments
+  # ------------------------------------------------------------------
+  validate:
+    name: "Validate — ${{ matrix.org }}"
+    needs: detect-changes
+    if: needs.detect-changes.outputs.validation_matrix != '{"org":[]}'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.detect-changes.outputs.validation_matrix) }}
+    environment: "${{ matrix.org }}-sandbox"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to ${{ matrix.org }} sandbox
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias "${{ matrix.org }}-sandbox" --set-default
+          rm -f auth_url.txt
+
+      - name: Validate shared packages (dry-run)
+        if: needs.detect-changes.outputs.has_shared_changes == 'true'
+        run: |
+          PACKAGES='${{ needs.detect-changes.outputs.packages_changed }}'
+          for pkg in $(echo "$PACKAGES" | python3 -c "import sys,json; [print(p) for p in json.load(sys.stdin)]"); do
+            echo "::group::Validating packages/${pkg}"
+            sf project deploy start \
+              --source-dir "packages/${pkg}" \
+              --target-org "${{ matrix.org }}-sandbox" \
+              --dry-run \
+              --wait 30 \
+              --verbose
+            echo "::endgroup::"
+          done
+
+      - name: Validate org-specific metadata (dry-run)
+        if: contains(fromJSON(needs.detect-changes.outputs.orgs_changed), matrix.org)
+        run: |
+          echo "::group::Validating orgs/${{ matrix.org }}"
+          sf project deploy start \
+            --source-dir "orgs/${{ matrix.org }}" \
+            --target-org "${{ matrix.org }}-sandbox" \
+            --dry-run \
+            --wait 30 \
+            --verbose
+          echo "::endgroup::"
+
+  # ------------------------------------------------------------------
+  # 3. Run Apex tests for changed packages
+  # ------------------------------------------------------------------
+  run-tests:
+    name: "Apex Tests — ${{ matrix.org }}"
+    needs:
+      - detect-changes
+      - validate
+    if: needs.detect-changes.outputs.validation_matrix != '{"org":[]}'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.detect-changes.outputs.validation_matrix) }}
+    environment: "${{ matrix.org }}-sandbox"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to ${{ matrix.org }} sandbox
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias "${{ matrix.org }}-sandbox" --set-default
+          rm -f auth_url.txt
+
+      - name: Discover and run Apex tests
+        id: apex-tests
+        run: |
+          TEST_CLASSES=""
+
+          # Collect test classes from changed shared packages
+          PACKAGES='${{ needs.detect-changes.outputs.packages_changed }}'
+          if [ "$PACKAGES" != "[]" ]; then
+            for pkg in $(echo "$PACKAGES" | python3 -c "import sys,json; [print(p) for p in json.load(sys.stdin)]"); do
+              FOUND=$(find "packages/${pkg}" -name "*Test.cls" -type f 2>/dev/null | xargs -I{} basename {} .cls | paste -sd, - || true)
+              if [ -n "$FOUND" ]; then
+                TEST_CLASSES="${TEST_CLASSES:+${TEST_CLASSES},}${FOUND}"
+              fi
+            done
+          fi
+
+          # Collect test classes from changed org-specific directories
+          ORGS='${{ needs.detect-changes.outputs.orgs_changed }}'
+          ORG="${{ matrix.org }}"
+          if echo "$ORGS" | python3 -c "import sys,json; exit(0 if '$ORG' in json.load(sys.stdin) else 1)" 2>/dev/null; then
+            FOUND=$(find "orgs/${ORG}" -name "*Test.cls" -type f 2>/dev/null | xargs -I{} basename {} .cls | paste -sd, - || true)
+            if [ -n "$FOUND" ]; then
+              TEST_CLASSES="${TEST_CLASSES:+${TEST_CLASSES},}${FOUND}"
+            fi
+          fi
+
+          if [ -n "$TEST_CLASSES" ]; then
+            echo "Running tests: ${TEST_CLASSES}"
+            sf apex run test \
+              --class-names "$TEST_CLASSES" \
+              --code-coverage \
+              --result-format json \
+              --wait 30 \
+              --target-org "${{ matrix.org }}-sandbox" \
+              --output-dir test-results
+            echo "has_tests=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No test classes found for changed packages."
+            echo "has_tests=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload test results
+        if: steps.apex-tests.outputs.has_tests == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: "apex-test-results-${{ matrix.org }}"
+          path: test-results/
+          retention-days: 14
+
+  # ------------------------------------------------------------------
+  # 4. Post summary comment on the PR
+  # ------------------------------------------------------------------
+  pr-comment:
+    name: PR Summary
+    needs:
+      - detect-changes
+      - validate
+      - run-tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post PR summary comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const packagesChanged = JSON.parse('${{ needs.detect-changes.outputs.packages_changed }}');
+            const orgsChanged = JSON.parse('${{ needs.detect-changes.outputs.orgs_changed }}');
+            const hasShared = '${{ needs.detect-changes.outputs.has_shared_changes }}' === 'true';
+            const hasOrg = '${{ needs.detect-changes.outputs.has_org_changes }}' === 'true';
+            const validateResult = '${{ needs.validate.result }}';
+            const testResult = '${{ needs.run-tests.result }}';
+
+            const statusIcon = (result) => {
+              if (result === 'success') return ':white_check_mark:';
+              if (result === 'skipped') return ':next_track_button:';
+              return ':x:';
+            };
+
+            let body = `## Deployment Validation Summary\n\n`;
+            body += `| Check | Status |\n|-------|--------|\n`;
+            body += `| Validation (dry-run) | ${statusIcon(validateResult)} ${validateResult} |\n`;
+            body += `| Apex Tests | ${statusIcon(testResult)} ${testResult} |\n\n`;
+
+            body += `### Affected Packages\n`;
+            if (packagesChanged.length > 0) {
+              body += packagesChanged.map(p => `- \`packages/${p}\``).join('\n') + '\n';
+            } else {
+              body += '_No shared package changes._\n';
+            }
+
+            body += `\n### Affected Orgs\n`;
+            const allOrgs = ['eu', 'us', 'apac'];
+            if (hasShared) {
+              body += ':warning: **Shared platform change — all orgs will be validated.**\n';
+              body += allOrgs.map(o => `- [x] ${o.toUpperCase()}`).join('\n') + '\n';
+            } else if (orgsChanged.length > 0) {
+              body += allOrgs.map(o => {
+                const checked = orgsChanged.includes(o) ? 'x' : ' ';
+                return `- [${checked}] ${o.toUpperCase()}`;
+              }).join('\n') + '\n';
+            } else {
+              body += '_No org-specific changes._\n';
+            }
+
+            body += `\n---\n_Generated by the validate-pr workflow._`;
+
+            // Find and update or create the comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const marker = '## Deployment Validation Summary';
+            const existing = comments.find(c => c.body.startsWith(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

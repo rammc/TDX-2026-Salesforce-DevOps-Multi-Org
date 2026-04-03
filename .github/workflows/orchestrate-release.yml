@@ -1,0 +1,857 @@
+# orchestrate-release.yml — Full Release Orchestration Pipeline
+# Triggered by version tags (v*). Coordinates the complete deployment
+# sequence: shared packages -> org deltas -> smoke tests -> notification.
+#
+# Required secrets (per environment):
+#   SF_AUTH_URL       — Salesforce CLI SFDX auth URL for the target org
+#   SLACK_WEBHOOK_URL — (repository secret) Slack incoming webhook for notifications
+#
+# Required GitHub Environments (with required reviewers for approval gates):
+#   production-eu   — requires reviewer approval before EU production deploy
+#   production-us   — requires reviewer approval before US production deploy
+#   production-apac — requires reviewer approval before APAC production deploy
+# ------------------------------------------------------------------
+name: Orchestrate Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  # ------------------------------------------------------------------
+  # 1. Detect changes between this tag and the previous tag
+  # ------------------------------------------------------------------
+  detect-changes:
+    name: Detect Release Changes
+    runs-on: ubuntu-latest
+    outputs:
+      packages_changed: ${{ steps.detect.outputs.packages_changed }}
+      orgs_changed: ${{ steps.detect.outputs.orgs_changed }}
+      has_shared_changes: ${{ steps.detect.outputs.has_shared_changes }}
+      has_org_changes: ${{ steps.detect.outputs.has_org_changes }}
+      previous_tag: ${{ steps.tags.outputs.previous_tag }}
+      current_tag: ${{ steps.tags.outputs.current_tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag range
+        id: tags
+        run: |
+          CURRENT_TAG="${{ github.ref_name }}"
+          echo "current_tag=${CURRENT_TAG}" >> "$GITHUB_OUTPUT"
+
+          # Find the previous tag
+          PREVIOUS_TAG=$(git tag --sort=-version:refname | grep -A1 "^${CURRENT_TAG}$" | tail -1)
+          if [ "$PREVIOUS_TAG" = "$CURRENT_TAG" ] || [ -z "$PREVIOUS_TAG" ]; then
+            # No previous tag; compare against the initial commit
+            PREVIOUS_TAG=$(git rev-list --max-parents=0 HEAD | head -1)
+          fi
+          echo "previous_tag=${PREVIOUS_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Comparing ${PREVIOUS_TAG}..${CURRENT_TAG}"
+
+      - name: Detect changed files
+        id: detect
+        run: |
+          PREVIOUS='${{ steps.tags.outputs.previous_tag }}'
+          CURRENT='${{ steps.tags.outputs.current_tag }}'
+
+          CHANGED_FILES=$(git diff --name-only "${PREVIOUS}..${CURRENT}")
+
+          # Detect changed shared packages
+          declare -a pkg_list=()
+          for pkg in core integration logic; do
+            if echo "$CHANGED_FILES" | grep -q "^packages/${pkg}/"; then
+              pkg_list+=("\"${pkg}\"")
+            fi
+          done
+          if [ ${#pkg_list[@]} -gt 0 ]; then
+            PACKAGES="[$(IFS=,; echo "${pkg_list[*]}")]"
+          else
+            PACKAGES="[]"
+          fi
+
+          # Detect changed orgs
+          declare -a org_list=()
+          for org in eu us apac; do
+            if echo "$CHANGED_FILES" | grep -q "^orgs/${org}/"; then
+              org_list+=("\"${org}\"")
+            fi
+          done
+          if [ ${#org_list[@]} -gt 0 ]; then
+            ORGS="[$(IFS=,; echo "${org_list[*]}")]"
+          else
+            ORGS="[]"
+          fi
+
+          echo "packages_changed=${PACKAGES}" >> "$GITHUB_OUTPUT"
+          echo "orgs_changed=${ORGS}" >> "$GITHUB_OUTPUT"
+          echo "has_shared_changes=$( [ "$PACKAGES" != "[]" ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+          echo "has_org_changes=$( [ "$ORGS" != "[]" ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+
+          echo "Packages: ${PACKAGES}"
+          echo "Orgs: ${ORGS}"
+
+  # ------------------------------------------------------------------
+  # 2. Deploy shared packages sequentially (core -> integration -> logic)
+  #    Each package deploys to all three orgs behind an approval gate.
+  # ------------------------------------------------------------------
+  deploy-core-eu:
+    name: "Deploy core -> EU"
+    needs: detect-changes
+    if: contains(fromJSON(needs.detect-changes.outputs.packages_changed), 'core')
+    runs-on: ubuntu-latest
+    environment: production-eu
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to EU production
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias eu-prod --set-default
+          rm -f auth_url.txt
+
+      - name: Deploy packages/core to EU
+        run: |
+          sf project deploy start \
+            --source-dir packages/core \
+            --target-org eu-prod \
+            --wait 60 \
+            --verbose
+
+  deploy-core-us:
+    name: "Deploy core -> US"
+    needs:
+      - detect-changes
+      - deploy-core-eu
+    if: contains(fromJSON(needs.detect-changes.outputs.packages_changed), 'core')
+    runs-on: ubuntu-latest
+    environment: production-us
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to US production
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias us-prod --set-default
+          rm -f auth_url.txt
+
+      - name: Deploy packages/core to US
+        run: |
+          sf project deploy start \
+            --source-dir packages/core \
+            --target-org us-prod \
+            --wait 60 \
+            --verbose
+
+  deploy-core-apac:
+    name: "Deploy core -> APAC"
+    needs:
+      - detect-changes
+      - deploy-core-us
+    if: contains(fromJSON(needs.detect-changes.outputs.packages_changed), 'core')
+    runs-on: ubuntu-latest
+    environment: production-apac
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to APAC production
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias apac-prod --set-default
+          rm -f auth_url.txt
+
+      - name: Deploy packages/core to APAC
+        run: |
+          sf project deploy start \
+            --source-dir packages/core \
+            --target-org apac-prod \
+            --wait 60 \
+            --verbose
+
+  # --- integration package (after core) ---
+  deploy-integration-eu:
+    name: "Deploy integration -> EU"
+    needs:
+      - detect-changes
+      - deploy-core-eu
+      - deploy-core-us
+      - deploy-core-apac
+    if: |
+      always() &&
+      contains(fromJSON(needs.detect-changes.outputs.packages_changed), 'integration') &&
+      (needs.deploy-core-apac.result == 'success' || needs.deploy-core-apac.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: production-eu
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to EU production
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias eu-prod --set-default
+          rm -f auth_url.txt
+
+      - name: Deploy packages/integration to EU
+        run: |
+          sf project deploy start \
+            --source-dir packages/integration \
+            --target-org eu-prod \
+            --wait 60 \
+            --verbose
+
+  deploy-integration-us:
+    name: "Deploy integration -> US"
+    needs:
+      - detect-changes
+      - deploy-integration-eu
+    if: |
+      always() &&
+      contains(fromJSON(needs.detect-changes.outputs.packages_changed), 'integration') &&
+      needs.deploy-integration-eu.result == 'success'
+    runs-on: ubuntu-latest
+    environment: production-us
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to US production
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias us-prod --set-default
+          rm -f auth_url.txt
+
+      - name: Deploy packages/integration to US
+        run: |
+          sf project deploy start \
+            --source-dir packages/integration \
+            --target-org us-prod \
+            --wait 60 \
+            --verbose
+
+  deploy-integration-apac:
+    name: "Deploy integration -> APAC"
+    needs:
+      - detect-changes
+      - deploy-integration-us
+    if: |
+      always() &&
+      contains(fromJSON(needs.detect-changes.outputs.packages_changed), 'integration') &&
+      needs.deploy-integration-us.result == 'success'
+    runs-on: ubuntu-latest
+    environment: production-apac
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to APAC production
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias apac-prod --set-default
+          rm -f auth_url.txt
+
+      - name: Deploy packages/integration to APAC
+        run: |
+          sf project deploy start \
+            --source-dir packages/integration \
+            --target-org apac-prod \
+            --wait 60 \
+            --verbose
+
+  # --- logic package (after integration) ---
+  deploy-logic-eu:
+    name: "Deploy logic -> EU"
+    needs:
+      - detect-changes
+      - deploy-integration-eu
+      - deploy-integration-us
+      - deploy-integration-apac
+    if: |
+      always() &&
+      contains(fromJSON(needs.detect-changes.outputs.packages_changed), 'logic') &&
+      (needs.deploy-integration-apac.result == 'success' || needs.deploy-integration-apac.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: production-eu
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to EU production
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias eu-prod --set-default
+          rm -f auth_url.txt
+
+      - name: Deploy packages/logic to EU
+        run: |
+          sf project deploy start \
+            --source-dir packages/logic \
+            --target-org eu-prod \
+            --wait 60 \
+            --verbose
+
+  deploy-logic-us:
+    name: "Deploy logic -> US"
+    needs:
+      - detect-changes
+      - deploy-logic-eu
+    if: |
+      always() &&
+      contains(fromJSON(needs.detect-changes.outputs.packages_changed), 'logic') &&
+      needs.deploy-logic-eu.result == 'success'
+    runs-on: ubuntu-latest
+    environment: production-us
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to US production
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias us-prod --set-default
+          rm -f auth_url.txt
+
+      - name: Deploy packages/logic to US
+        run: |
+          sf project deploy start \
+            --source-dir packages/logic \
+            --target-org us-prod \
+            --wait 60 \
+            --verbose
+
+  deploy-logic-apac:
+    name: "Deploy logic -> APAC"
+    needs:
+      - detect-changes
+      - deploy-logic-us
+    if: |
+      always() &&
+      contains(fromJSON(needs.detect-changes.outputs.packages_changed), 'logic') &&
+      needs.deploy-logic-us.result == 'success'
+    runs-on: ubuntu-latest
+    environment: production-apac
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to APAC production
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias apac-prod --set-default
+          rm -f auth_url.txt
+
+      - name: Deploy packages/logic to APAC
+        run: |
+          sf project deploy start \
+            --source-dir packages/logic \
+            --target-org apac-prod \
+            --wait 60 \
+            --verbose
+
+  # ------------------------------------------------------------------
+  # 3. Deploy org-specific deltas in parallel per region
+  # ------------------------------------------------------------------
+  deploy-org-eu:
+    name: "Deploy org deltas -> EU"
+    needs:
+      - detect-changes
+      - deploy-logic-eu
+      - deploy-logic-us
+      - deploy-logic-apac
+    if: |
+      always() &&
+      contains(fromJSON(needs.detect-changes.outputs.orgs_changed), 'eu') &&
+      (needs.deploy-logic-apac.result == 'success' || needs.deploy-logic-apac.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: production-eu
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to EU production
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias eu-prod --set-default
+          rm -f auth_url.txt
+
+      - name: Deploy orgs/eu
+        run: |
+          for src_dir in orgs/eu/*/; do
+            if [ -d "$src_dir" ]; then
+              echo "::group::Deploying ${src_dir}"
+              sf project deploy start \
+                --source-dir "$src_dir" \
+                --target-org eu-prod \
+                --wait 60 \
+                --verbose
+              echo "::endgroup::"
+            fi
+          done
+
+  deploy-org-us:
+    name: "Deploy org deltas -> US"
+    needs:
+      - detect-changes
+      - deploy-logic-eu
+      - deploy-logic-us
+      - deploy-logic-apac
+    if: |
+      always() &&
+      contains(fromJSON(needs.detect-changes.outputs.orgs_changed), 'us') &&
+      (needs.deploy-logic-apac.result == 'success' || needs.deploy-logic-apac.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: production-us
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to US production
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias us-prod --set-default
+          rm -f auth_url.txt
+
+      - name: Deploy orgs/us
+        run: |
+          for src_dir in orgs/us/*/; do
+            if [ -d "$src_dir" ]; then
+              echo "::group::Deploying ${src_dir}"
+              sf project deploy start \
+                --source-dir "$src_dir" \
+                --target-org us-prod \
+                --wait 60 \
+                --verbose
+              echo "::endgroup::"
+            fi
+          done
+
+  deploy-org-apac:
+    name: "Deploy org deltas -> APAC"
+    needs:
+      - detect-changes
+      - deploy-logic-eu
+      - deploy-logic-us
+      - deploy-logic-apac
+    if: |
+      always() &&
+      contains(fromJSON(needs.detect-changes.outputs.orgs_changed), 'apac') &&
+      (needs.deploy-logic-apac.result == 'success' || needs.deploy-logic-apac.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: production-apac
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to APAC production
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias apac-prod --set-default
+          rm -f auth_url.txt
+
+      - name: Deploy orgs/apac
+        run: |
+          for src_dir in orgs/apac/*/; do
+            if [ -d "$src_dir" ]; then
+              echo "::group::Deploying ${src_dir}"
+              sf project deploy start \
+                --source-dir "$src_dir" \
+                --target-org apac-prod \
+                --wait 60 \
+                --verbose
+              echo "::endgroup::"
+            fi
+          done
+
+  # ------------------------------------------------------------------
+  # 4. Smoke tests per org (after all deployments)
+  # ------------------------------------------------------------------
+  smoke-test-eu:
+    name: "Smoke Test — EU"
+    needs:
+      - detect-changes
+      - deploy-core-apac
+      - deploy-integration-apac
+      - deploy-logic-apac
+      - deploy-org-eu
+    if: |
+      always() &&
+      (needs.deploy-org-eu.result == 'success' || needs.deploy-org-eu.result == 'skipped') &&
+      (needs.deploy-logic-apac.result == 'success' || needs.deploy-logic-apac.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: production-eu
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to EU production
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias eu-prod --set-default
+          rm -f auth_url.txt
+
+      - name: Run smoke tests
+        run: |
+          chmod +x scripts/smoke-test.sh
+          scripts/smoke-test.sh eu eu-prod
+
+  smoke-test-us:
+    name: "Smoke Test — US"
+    needs:
+      - detect-changes
+      - deploy-core-apac
+      - deploy-integration-apac
+      - deploy-logic-apac
+      - deploy-org-us
+    if: |
+      always() &&
+      (needs.deploy-org-us.result == 'success' || needs.deploy-org-us.result == 'skipped') &&
+      (needs.deploy-logic-apac.result == 'success' || needs.deploy-logic-apac.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: production-us
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to US production
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias us-prod --set-default
+          rm -f auth_url.txt
+
+      - name: Run smoke tests
+        run: |
+          chmod +x scripts/smoke-test.sh
+          scripts/smoke-test.sh us us-prod
+
+  smoke-test-apac:
+    name: "Smoke Test — APAC"
+    needs:
+      - detect-changes
+      - deploy-core-apac
+      - deploy-integration-apac
+      - deploy-logic-apac
+      - deploy-org-apac
+    if: |
+      always() &&
+      (needs.deploy-org-apac.result == 'success' || needs.deploy-org-apac.result == 'skipped') &&
+      (needs.deploy-logic-apac.result == 'success' || needs.deploy-logic-apac.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: production-apac
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to APAC production
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias apac-prod --set-default
+          rm -f auth_url.txt
+
+      - name: Run smoke tests
+        run: |
+          chmod +x scripts/smoke-test.sh
+          scripts/smoke-test.sh apac apac-prod
+
+  # ------------------------------------------------------------------
+  # 5. Release notification with deployment matrix
+  # ------------------------------------------------------------------
+  release-notification:
+    name: Release Notification
+    needs:
+      - detect-changes
+      - deploy-core-eu
+      - deploy-core-us
+      - deploy-core-apac
+      - deploy-integration-eu
+      - deploy-integration-us
+      - deploy-integration-apac
+      - deploy-logic-eu
+      - deploy-logic-us
+      - deploy-logic-apac
+      - deploy-org-eu
+      - deploy-org-us
+      - deploy-org-apac
+      - smoke-test-eu
+      - smoke-test-us
+      - smoke-test-apac
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate release summary
+        id: summary
+        run: |
+          TAG="${{ needs.detect-changes.outputs.current_tag }}"
+          PREV_TAG="${{ needs.detect-changes.outputs.previous_tag }}"
+          PACKAGES='${{ needs.detect-changes.outputs.packages_changed }}'
+          ORGS='${{ needs.detect-changes.outputs.orgs_changed }}'
+
+          STATUS() {
+            local result="$1"
+            case "$result" in
+              success) echo "deployed" ;;
+              skipped) echo "skipped" ;;
+              *) echo "FAILED" ;;
+            esac
+          }
+
+          # Build deployment matrix table
+          cat > /tmp/release-summary.txt <<SUMMARY
+          Release: ${TAG} (previous: ${PREV_TAG})
+
+          === Shared Package Deployment Matrix ===
+          Package        | EU            | US            | APAC
+          -------------- | ------------- | ------------- | -------------
+          core           | $(STATUS "${{ needs.deploy-core-eu.result }}") | $(STATUS "${{ needs.deploy-core-us.result }}") | $(STATUS "${{ needs.deploy-core-apac.result }}")
+          integration    | $(STATUS "${{ needs.deploy-integration-eu.result }}") | $(STATUS "${{ needs.deploy-integration-us.result }}") | $(STATUS "${{ needs.deploy-integration-apac.result }}")
+          logic          | $(STATUS "${{ needs.deploy-logic-eu.result }}") | $(STATUS "${{ needs.deploy-logic-us.result }}") | $(STATUS "${{ needs.deploy-logic-apac.result }}")
+
+          === Org-Specific Deployments ===
+          EU:   $(STATUS "${{ needs.deploy-org-eu.result }}")
+          US:   $(STATUS "${{ needs.deploy-org-us.result }}")
+          APAC: $(STATUS "${{ needs.deploy-org-apac.result }}")
+
+          === Smoke Tests ===
+          EU:   $(STATUS "${{ needs.smoke-test-eu.result }}")
+          US:   $(STATUS "${{ needs.smoke-test-us.result }}")
+          APAC: $(STATUS "${{ needs.smoke-test-apac.result }}")
+          SUMMARY
+
+          cat /tmp/release-summary.txt
+
+          # Determine overall status
+          FAILED=false
+          for result in \
+            "${{ needs.deploy-core-eu.result }}" \
+            "${{ needs.deploy-core-us.result }}" \
+            "${{ needs.deploy-core-apac.result }}" \
+            "${{ needs.deploy-integration-eu.result }}" \
+            "${{ needs.deploy-integration-us.result }}" \
+            "${{ needs.deploy-integration-apac.result }}" \
+            "${{ needs.deploy-logic-eu.result }}" \
+            "${{ needs.deploy-logic-us.result }}" \
+            "${{ needs.deploy-logic-apac.result }}" \
+            "${{ needs.deploy-org-eu.result }}" \
+            "${{ needs.deploy-org-us.result }}" \
+            "${{ needs.deploy-org-apac.result }}" \
+            "${{ needs.smoke-test-eu.result }}" \
+            "${{ needs.smoke-test-us.result }}" \
+            "${{ needs.smoke-test-apac.result }}"; do
+            if [ "$result" = "failure" ]; then
+              FAILED=true
+              break
+            fi
+          done
+
+          if [ "$FAILED" = "true" ]; then
+            echo "overall=FAILED" >> "$GITHUB_OUTPUT"
+          else
+            echo "overall=SUCCESS" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post release notification to Slack
+        if: env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          TAG="${{ needs.detect-changes.outputs.current_tag }}"
+          OVERALL="${{ steps.summary.outputs.overall }}"
+
+          if [ "$OVERALL" = "SUCCESS" ]; then
+            COLOR="#36a64f"
+          else
+            COLOR="#dc3545"
+          fi
+
+          STATUS_EMOJI() {
+            case "$1" in
+              success) echo ":white_check_mark:" ;;
+              skipped) echo ":next_track_button:" ;;
+              *) echo ":x:" ;;
+            esac
+          }
+
+          curl -sfS -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d @- <<PAYLOAD
+          {
+            "attachments": [
+              {
+                "color": "${COLOR}",
+                "blocks": [
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "Release ${TAG} — ${OVERALL}"
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "*Shared Packages (EU / US / APAC):*\n\`core\`: ${{ needs.deploy-core-eu.result }} / ${{ needs.deploy-core-us.result }} / ${{ needs.deploy-core-apac.result }}\n\`integration\`: ${{ needs.deploy-integration-eu.result }} / ${{ needs.deploy-integration-us.result }} / ${{ needs.deploy-integration-apac.result }}\n\`logic\`: ${{ needs.deploy-logic-eu.result }} / ${{ needs.deploy-logic-us.result }} / ${{ needs.deploy-logic-apac.result }}"
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "*Org Deltas:*\nEU: ${{ needs.deploy-org-eu.result }} | US: ${{ needs.deploy-org-us.result }} | APAC: ${{ needs.deploy-org-apac.result }}"
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "*Smoke Tests:*\nEU: ${{ needs.smoke-test-eu.result }} | US: ${{ needs.smoke-test-us.result }} | APAC: ${{ needs.smoke-test-apac.result }}"
+                    }
+                  },
+                  {
+                    "type": "context",
+                    "elements": [
+                      {
+                        "type": "mrkdwn",
+                        "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run> | <${{ github.server_url }}/${{ github.repository }}/releases/tag/${TAG}|View Release>"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+          PAYLOAD

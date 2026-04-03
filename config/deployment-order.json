@@ -1,0 +1,24 @@
+{
+  "description": "Defines the dependency-aware deployment sequence. The pipeline reads this to determine the order in which packages and org overrides are deployed.",
+  "shared_packages": {
+    "deploy_order": ["core", "integration", "logic"],
+    "strategy": "sequential",
+    "rationale": "Each layer depends on the previous — core has no deps, integration depends on core, logic depends on both."
+  },
+  "org_overrides": {
+    "deploy_order": ["eu", "us", "apac"],
+    "strategy": "parallel",
+    "rationale": "Org-specific packages are independent of each other and can be deployed in parallel after shared packages succeed."
+  },
+  "dependency_graph": {
+    "core": [],
+    "integration": ["core"],
+    "logic": ["core", "integration"],
+    "orgs/eu/logic": ["logic"],
+    "orgs/eu/ui": ["logic"],
+    "orgs/us/logic": ["logic"],
+    "orgs/us/ui": ["logic"],
+    "orgs/apac/logic": ["logic"],
+    "orgs/apac/ui": ["logic"]
+  }
+}

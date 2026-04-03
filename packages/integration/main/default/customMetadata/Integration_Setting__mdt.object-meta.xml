@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <label>Integration Setting</label>
+    <pluralLabel>Integration Settings</pluralLabel>
+    <description>Custom metadata type for storing integration configuration settings such as endpoints, timeouts, and activation status per region.</description>
+    <visibility>Public</visibility>
+    <fields>
+        <fullName>Endpoint__c</fullName>
+        <label>Endpoint</label>
+        <description>The full URL of the integration endpoint.</description>
+        <fieldManageability>DeveloperControlled</fieldManageability>
+        <type>Url</type>
+    </fields>
+    <fields>
+        <fullName>Timeout_Ms__c</fullName>
+        <label>Timeout (ms)</label>
+        <description>HTTP request timeout in milliseconds.</description>
+        <fieldManageability>DeveloperControlled</fieldManageability>
+        <type>Number</type>
+        <precision>8</precision>
+        <scale>0</scale>
+        <unique>false</unique>
+    </fields>
+    <fields>
+        <fullName>Is_Active__c</fullName>
+        <label>Is Active</label>
+        <description>Indicates whether this integration setting is currently active.</description>
+        <fieldManageability>DeveloperControlled</fieldManageability>
+        <type>Checkbox</type>
+        <defaultValue>true</defaultValue>
+    </fields>
+    <fields>
+        <fullName>Region__c</fullName>
+        <label>Region</label>
+        <description>The region or scope this integration setting applies to (e.g. EU, US, APAC, GLOBAL).</description>
+        <fieldManageability>DeveloperControlled</fieldManageability>
+        <type>Text</type>
+        <length>40</length>
+        <unique>false</unique>
+    </fields>
+</CustomObject>

@@ -1,0 +1,321 @@
+# deploy-shared.yml — Shared Package Deployment Pipeline
+# Deploys shared packages (core, integration, logic) to all orgs in
+# dependency order: core -> integration -> logic.
+#
+# Required secrets (per environment):
+#   SF_AUTH_URL       — Salesforce CLI SFDX auth URL for the target org
+#   SLACK_WEBHOOK_URL — (repository secret) Slack incoming webhook for notifications
+#
+# Required GitHub Environments:
+#   production-eu, production-us, production-apac
+# ------------------------------------------------------------------
+name: Deploy Shared Packages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "packages/**"
+
+  workflow_call:
+    inputs:
+      packages:
+        description: "JSON array of packages to deploy (e.g. [\"core\",\"integration\",\"logic\"])"
+        required: false
+        type: string
+        default: '["core","integration","logic"]'
+      dry_run:
+        description: "Run in dry-run / validation-only mode"
+        required: false
+        type: boolean
+        default: false
+    secrets: inherit
+    # Each deploy job runs in a GitHub Environment (production-{region})
+    # that provides its own SF_AUTH_URL secret. No per-org secrets needed.
+
+concurrency:
+  group: deploy-shared-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ------------------------------------------------------------------
+  # Detect which shared packages changed (push trigger only)
+  # ------------------------------------------------------------------
+  detect-packages:
+    name: Detect Changed Packages
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.resolve.outputs.packages }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve package list
+        id: resolve
+        run: |
+          # If called as reusable workflow with explicit packages, use those
+          INPUT_PACKAGES='${{ inputs.packages }}'
+          if [ -n "$INPUT_PACKAGES" ] && [ "$INPUT_PACKAGES" != "" ]; then
+            echo "packages=${INPUT_PACKAGES}" >> "$GITHUB_OUTPUT"
+            echo "Using provided packages: ${INPUT_PACKAGES}"
+            exit 0
+          fi
+
+          # Otherwise detect from changed files
+          chmod +x scripts/detect-changes.sh
+          scripts/detect-changes.sh "HEAD~1"
+
+          PACKAGES="${{ env.packages_changed || '[]' }}"
+
+          # Source the output directly
+          PACKAGES=$(grep 'packages_changed=' "$GITHUB_OUTPUT" 2>/dev/null | tail -1 | cut -d= -f2 || echo '[]')
+
+          # Fallback: check each package directory for changes
+          if [ "$PACKAGES" = "[]" ] || [ -z "$PACKAGES" ]; then
+            declare -a pkg_list=()
+            for pkg in core integration logic; do
+              if git diff --name-only HEAD~1 HEAD -- "packages/${pkg}/" | grep -q .; then
+                pkg_list+=("\"${pkg}\"")
+              fi
+            done
+            if [ ${#pkg_list[@]} -gt 0 ]; then
+              PACKAGES="[$(IFS=,; echo "${pkg_list[*]}")]"
+            else
+              PACKAGES='["core","integration","logic"]'
+            fi
+          fi
+
+          echo "packages=${PACKAGES}" >> "$GITHUB_OUTPUT"
+          echo "Detected packages: ${PACKAGES}"
+
+  # ------------------------------------------------------------------
+  # Deploy: core package
+  # ------------------------------------------------------------------
+  deploy-core:
+    name: "Deploy core"
+    needs: detect-packages
+    if: contains(fromJSON(needs.detect-packages.outputs.packages), 'core')
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1
+      matrix:
+        org: [eu, us, apac]
+    environment: "production-${{ matrix.org }}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to ${{ matrix.org }} org
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias "${{ matrix.org }}-target" --set-default
+          rm -f auth_url.txt
+
+      - name: Deploy packages/core
+        run: |
+          DRY_RUN_FLAG=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            DRY_RUN_FLAG="--dry-run"
+          fi
+          sf project deploy start \
+            --source-dir packages/core \
+            --target-org "${{ matrix.org }}-target" \
+            $DRY_RUN_FLAG \
+            --wait 60 \
+            --verbose
+
+  # ------------------------------------------------------------------
+  # Deploy: integration package (after core)
+  # ------------------------------------------------------------------
+  deploy-integration:
+    name: "Deploy integration"
+    needs:
+      - detect-packages
+      - deploy-core
+    if: |
+      always() &&
+      contains(fromJSON(needs.detect-packages.outputs.packages), 'integration') &&
+      (needs.deploy-core.result == 'success' || needs.deploy-core.result == 'skipped')
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1
+      matrix:
+        org: [eu, us, apac]
+    environment: "production-${{ matrix.org }}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to ${{ matrix.org }} org
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias "${{ matrix.org }}-target" --set-default
+          rm -f auth_url.txt
+
+      - name: Deploy packages/integration
+        run: |
+          DRY_RUN_FLAG=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            DRY_RUN_FLAG="--dry-run"
+          fi
+          sf project deploy start \
+            --source-dir packages/integration \
+            --target-org "${{ matrix.org }}-target" \
+            $DRY_RUN_FLAG \
+            --wait 60 \
+            --verbose
+
+  # ------------------------------------------------------------------
+  # Deploy: logic package (after integration)
+  # ------------------------------------------------------------------
+  deploy-logic:
+    name: "Deploy logic"
+    needs:
+      - detect-packages
+      - deploy-integration
+    if: |
+      always() &&
+      contains(fromJSON(needs.detect-packages.outputs.packages), 'logic') &&
+      (needs.deploy-integration.result == 'success' || needs.deploy-integration.result == 'skipped')
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1
+      matrix:
+        org: [eu, us, apac]
+    environment: "production-${{ matrix.org }}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to ${{ matrix.org }} org
+        run: |
+          echo "${{ secrets.SF_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias "${{ matrix.org }}-target" --set-default
+          rm -f auth_url.txt
+
+      - name: Deploy packages/logic
+        run: |
+          DRY_RUN_FLAG=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            DRY_RUN_FLAG="--dry-run"
+          fi
+          sf project deploy start \
+            --source-dir packages/logic \
+            --target-org "${{ matrix.org }}-target" \
+            $DRY_RUN_FLAG \
+            --wait 60 \
+            --verbose
+
+  # ------------------------------------------------------------------
+  # Notify Slack
+  # ------------------------------------------------------------------
+  notify:
+    name: Slack Notification
+    needs:
+      - deploy-core
+      - deploy-integration
+      - deploy-logic
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post deployment status to Slack
+        if: env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          CORE_STATUS="${{ needs.deploy-core.result }}"
+          INTEGRATION_STATUS="${{ needs.deploy-integration.result }}"
+          LOGIC_STATUS="${{ needs.deploy-logic.result }}"
+
+          # Determine overall status
+          if [ "$CORE_STATUS" = "success" ] || [ "$CORE_STATUS" = "skipped" ]; then
+            if [ "$INTEGRATION_STATUS" = "success" ] || [ "$INTEGRATION_STATUS" = "skipped" ]; then
+              if [ "$LOGIC_STATUS" = "success" ] || [ "$LOGIC_STATUS" = "skipped" ]; then
+                OVERALL="SUCCESS"
+                COLOR="#36a64f"
+              else
+                OVERALL="FAILED"
+                COLOR="#dc3545"
+              fi
+            else
+              OVERALL="FAILED"
+              COLOR="#dc3545"
+            fi
+          else
+            OVERALL="FAILED"
+            COLOR="#dc3545"
+          fi
+
+          STATUS_ICON() {
+            case "$1" in
+              success) echo ":white_check_mark:" ;;
+              skipped) echo ":next_track_button:" ;;
+              *) echo ":x:" ;;
+            esac
+          }
+
+          curl -sfS -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d @- <<PAYLOAD
+          {
+            "attachments": [
+              {
+                "color": "${COLOR}",
+                "blocks": [
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "Shared Package Deployment — ${OVERALL}"
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "fields": [
+                      { "type": "mrkdwn", "text": "*core:* ${CORE_STATUS}" },
+                      { "type": "mrkdwn", "text": "*integration:* ${INTEGRATION_STATUS}" },
+                      { "type": "mrkdwn", "text": "*logic:* ${LOGIC_STATUS}" },
+                      { "type": "mrkdwn", "text": "*Ref:* \`${{ github.sha }}\`" }
+                    ]
+                  },
+                  {
+                    "type": "context",
+                    "elements": [
+                      {
+                        "type": "mrkdwn",
+                        "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+          PAYLOAD

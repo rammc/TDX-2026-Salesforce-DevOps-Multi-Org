@@ -1,0 +1,34 @@
+# Salesforce
+.sfdx/
+.sf/
+deploy-options.json
+
+# Scratch org snapshots
+*.snp
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Node (if using plugins/scripts)
+node_modules/
+package-lock.json
+
+# Test results
+test-results/
+coverage/
+.nyc_output/
+
+# Auth files — never commit
+authFile.json
+*.authurl

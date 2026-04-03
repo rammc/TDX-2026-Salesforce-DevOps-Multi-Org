@@ -1,0 +1,90 @@
+{
+  "packageDirectories": [
+    {
+      "path": "packages/core",
+      "default": true,
+      "package": "modbp-core",
+      "versionName": "Core Platform v1",
+      "versionNumber": "1.0.0.NEXT"
+    },
+    {
+      "path": "packages/integration",
+      "package": "modbp-integration",
+      "versionName": "Integration Layer v1",
+      "versionNumber": "1.0.0.NEXT",
+      "dependencies": [
+        {
+          "package": "modbp-core",
+          "versionNumber": "1.0.0.LATEST"
+        }
+      ]
+    },
+    {
+      "path": "packages/logic",
+      "package": "modbp-logic",
+      "versionName": "Shared Business Logic v1",
+      "versionNumber": "1.0.0.NEXT",
+      "dependencies": [
+        {
+          "package": "modbp-core",
+          "versionNumber": "1.0.0.LATEST"
+        },
+        {
+          "package": "modbp-integration",
+          "versionNumber": "1.0.0.LATEST"
+        }
+      ]
+    },
+    {
+      "path": "orgs/eu/logic",
+      "package": "modbp-eu-logic",
+      "versionName": "EU Region Logic v1",
+      "versionNumber": "1.0.0.NEXT",
+      "dependencies": [
+        {
+          "package": "modbp-logic",
+          "versionNumber": "1.0.0.LATEST"
+        }
+      ]
+    },
+    {
+      "path": "orgs/us/logic",
+      "package": "modbp-us-logic",
+      "versionName": "US Region Logic v1",
+      "versionNumber": "1.0.0.NEXT",
+      "dependencies": [
+        {
+          "package": "modbp-logic",
+          "versionNumber": "1.0.0.LATEST"
+        }
+      ]
+    },
+    {
+      "path": "orgs/apac/logic",
+      "package": "modbp-apac-logic",
+      "versionName": "APAC Region Logic v1",
+      "versionNumber": "1.0.0.NEXT",
+      "dependencies": [
+        {
+          "package": "modbp-logic",
+          "versionNumber": "1.0.0.LATEST"
+        }
+      ]
+    },
+    {
+      "path": "orgs/eu/ui",
+      "default": false
+    },
+    {
+      "path": "orgs/us/ui",
+      "default": false
+    },
+    {
+      "path": "orgs/apac/ui",
+      "default": false
+    }
+  ],
+  "namespace": "modbp",
+  "sfdcLoginUrl": "https://login.salesforce.com",
+  "sourceApiVersion": "62.0"
+}

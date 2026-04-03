@@ -229,13 +229,57 @@ See [docs/DECISION-LOG.md](docs/DECISION-LOG.md) for the rationale behind our br
 
 This repository accompanies the **TrailblazerDX 2026** (TDX) session:
 
-> **Design a DevOps Strategy for Multi-Org Implementations**
+> **Design a DevOps Strategy for Multi-Org Implementationss**
 
 The session explores how to structure a single repository to manage metadata across multiple Salesforce orgs — handling shared packages, org-specific overrides, and fan-out deployments through GitHub Actions.
 
 Whether you run two orgs or twenty, the patterns in this blueprint scale from sandbox validation all the way to production delivery.
 
 [TrailblazerDX 2026](https://reg.salesforce.com/flow/plus/tdx26/sessioncatalog/page/catalog/session/1770914049401001a8hh)
+
+## References & further reading
+
+### Capgemini Salesforce Architects
+
+- [How to fund and establish a Salesforce Center of Excellence](https://medium.com/capgemini-salesforce-architects/how-to-fund-and-establish-a-salesforce-center-of-excellence-in-enterprise-organizations-842fbbfc8441) — CoE as the governance backbone for multi-org standardization
+- [Intentional Design in System Architecture](https://medium.com/capgemini-salesforce-architects/intentional-design-in-system-architecture-34d2458dfce9) — Why deliberate architecture decisions outperform organic growth
+- [Architectural Patterns for Enterprise AI: Agentforce 3.0](https://medium.com/capgemini-salesforce-architects/architectural-patterns-for-enterprise-ai-agentforce-3-0-design-principles-a4dc9a29f0a9) — Agent deployment as a new DevOps dimension
+- [How to Improve Code Quality in SFDX Projects with SonarCloud](https://medium.com/capgemini-salesforce-architects/how-to-improve-code-quality-in-sfdx-projects-with-sonarcloud-8c1002f7bd1e) — Static code analysis and quality gates in CI/CD
+- [VS Code for Salesforce Admins & Consultants](https://medium.com/capgemini-salesforce-architects/vs-code-for-salesforce-admins-consultants-a-beginners-guide-with-tips-setup-instructions-21949a5f86b7) — Unified tooling for hybrid admin/dev teams
+- [Optimizing Salesforce Custom Metadata Types](https://medium.com/capgemini-salesforce-architects/optimizing-salesforce-custom-metadata-types-ad413d81db92) — CMT as org-specific configuration mechanism
+- [Local Development for Lightning Web Components](https://medium.com/capgemini-salesforce-architects/local-development-for-lightning-web-components-7a3fdc1c4b7d) — Faster feedback loops in multi-org development
+
+### Org strategy & enterprise architecture
+
+- [Enterprise Architecture: Single-org vs Multi-org Strategy](https://developer.salesforce.com/blogs/developer-relations/2014/10/enterprise-architecture-multi-org-strategy) — The foundational Salesforce Developer Blog post on org strategy decisions
+- [Salesforce Org Strategy](https://thectablog.com/salesforce-org-strategy/) — CTA-level analysis using the MIT-CISR operating model matrix
+- [Multi-Org Management: Framing a Salesforce Org Strategy](https://www.odaseva.com/blog/salesforce-multi-org-management-framing-a-salesforce-org-strategy/) — TOGAF-aligned strategy framework for multi-org alignment levels
+- [How to manage multiple Salesforce production orgs](https://gearset.com/blog/how-to-manage-multiple-salesforce-production-orgs/) — Practical challenges and patterns for multi-org environments
+
+### Salesforce DevOps & CI/CD
+
+- [The Future of Salesforce DevOps Is Here](https://admin.salesforce.com/blog/2026/the-future-of-salesforce-devops-is-here-whats-new-for-admins) — DevOps Center roadmap incl. Agentforce integration, GitLab/Azure support
+- [DevOps Center Developer Guide v66.0 (Spring '26)](https://developer.salesforce.com/docs/atlas.en-us.devops_center_dev.meta/devops_center_dev/devops_center_dev_relnotes.htm) — Official technical reference for DevOps Center
+- [Using Salesforce DX with GitHub Actions](https://developer.salesforce.com/blogs/2020/01/using-salesforce-dx-with-github-actions) — Salesforce's official guide to GitHub Actions integration
+- [Build Your Own CI/CD Pipeline Using GitHub Actions](https://www.salesforceben.com/build-your-own-ci-cd-pipeline-in-salesforce-using-github-actions/) — End-to-end walkthrough with sfdx-git-delta
+- [A Complete Guide to Salesforce DevOps Automation with GitHub Actions](https://www.salesforceben.com/a-complete-guide-to-salesforce-devops-automation-with-github-actions/) — Backup, code analysis, and data management automation
+- [salesforce-ci-cd-org-dev](https://github.com/salto-io/salesforce-ci-cd-org-dev) — Reference GitHub repo for org-based CI/CD with GitHub Actions
+
+### Unlocked packages & modular architecture
+
+- [Unlocked Packages: A Comprehensive Guide](https://www.salesforceben.com/unlocked-packages-in-salesforce-a-comprehensive-guide-for-developers/) — Deep dive into 2GP unlocked packages
+- [Unlocked Packages Developer Guide](https://developer.salesforce.com/docs/atlas.en-us.sfdx_dev.meta/sfdx_dev/sfdx_dev_unlocked_pkg_intro.htm) — Official Salesforce documentation
+- [Best Practices for Unlocked Packages](https://developer.salesforce.com/docs/atlas.en-us.sfdx_dev.meta/sfdx_dev/sfdx_dev_unlocked_pkg_best_practices.htm) — Salesforce's recommended patterns
+- [salesforce-unlocked-packages-guide](https://github.com/ECFMG/salesforce-unlocked-packages-guide) — Community guide for packages with CI/CD and multi-team support
+
+### Agentforce & Data Cloud in multi-org
+
+- [Architecture Patterns & DevOps with Agentforce and Data Cloud](https://gearset.com/video/ryan-cox-architecture-patterns-devops-with-agentforce-and-data-cloud/) — Ryan Cox (Salesforce DTA) on Data Cloud One multi-org patterns
+- [Agentforce Specialist: Deployment Lifecycle](https://trailhead.salesforce.com/content/learn/modules/cert-prep-agentforce-specialist/examine-the-deployment-lifecycle) — Official exam prep covering agent deployment from sandbox to production
+- [MuleSoft 2026 Connectivity Benchmark: Agent Fabric](https://salesforcedevops.net/index.php/2026/02/09/agentic-enterprise-infrastructure-semantic-context/) — Agent Scanners, multi-agent governance, enterprise context
+- [Best Practices for DevOps Teams Implementing Agentforce 2.0](https://blogs.perficient.com/2024/12/23/best-practices-for-devops-teams-implementing-salesforce-agentforce-2-0/) — Version control, phased rollouts, and monitoring for agent deployments
+
+
 
 ## Author
 

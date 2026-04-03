@@ -242,6 +242,11 @@ Whether you run two orgs or twenty, the patterns in this blueprint scale from sa
 **Christopher Ramm**
 DCX CTO Germany @ Capgemini | Salesforce CTA | Salesforce MVP
 
+## Disclaimer
+
+Built with AI assistance
+This repository was developed with support from AI tools (Claude by Anthropic) for code generation, documentation, and architecture documentation. All content has been reviewed, validated, and curated by the author. The architectural decisions, patterns, and recommendations reflect real-world enterprise experience.
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).

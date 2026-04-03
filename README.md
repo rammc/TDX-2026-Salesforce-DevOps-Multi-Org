@@ -10,6 +10,11 @@
 
 ## Architecture Overview
 
+![Multi-Org DevOps Architecture — Deployment flow from feature branches through environment-specific branches, orchestrated via GitHub Actions into EU, US and APAC production orgs with regional compliance gates (GDPR, SOX, Local sign-off) and local developer scratch orgs.](docs/images/Multi-Org-Setup.png)
+
+<details>
+<summary>Pipeline-level flow (Mermaid)</summary>
+
 ```mermaid
 flowchart TB
     subgraph repo["GitHub Repository"]
@@ -59,6 +64,8 @@ flowchart TB
     Release -->|"tag v*"| DeployShared
     Release -->|"tag v*"| DeployOrg
 ```
+
+</details>
 
 ## Quick Start
 

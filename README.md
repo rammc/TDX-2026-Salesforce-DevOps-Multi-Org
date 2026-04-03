@@ -135,6 +135,40 @@ TDX-2026-Salesforce-DevOps-Multi-Org/
 └── LICENSE                          # MIT license
 ```
 
+## Delivery Approach Reference
+
+Multi-org DevOps is not a one-size-fits-all problem. The right delivery approach depends on how the enterprise operates — specifically, where it sits on the MIT-CISR / SOGAF operating model matrix (Unification, Coordination, Replication, Diversification). A highly unified enterprise with standardized processes will lean toward package-based delivery; a coordinated or diversified enterprise with autonomous business units will gravitate toward repo-driven delivery. Both approaches are architecturally sound — the decision is organizational, not technical.
+
+### Approach A — Package-Based Delivery
+
+Package-based delivery treats unlocked packages as the unit of deployment. Each metadata layer gets its own scope, versioning, and upgrade cadence.
+
+| Package layer | Scope | Versioning | Upgrade cadence |
+|---|---|---|---|
+| **Core platform** · Data model, security, base objects | **Shared** · Installed in all orgs identically | Strict semantic versioning · Breaking changes = major bump | Quarterly release train · Aligned with SF releases |
+| **Integration layer** · Named creds, external services, events | **Shared** · Contracts must be consistent cross-org | API-contract versioning · Backward-compatible by default | On-demand + coordinated · Triggered by API changes |
+| **Business logic** · Flows, Apex, automation, agents | **Hybrid** · Shared base + org-specific extensions | Feature-branch per org · Shared base locked; extensions float | Continuous for extensions · Shared base follows core cadence |
+| **UI components** · LWC, Flexipages, app config | **Org-specific** · Each org has its own UX needs | Org-level versioning · No cross-org version sync needed | Continuous delivery · Local teams release independently |
+| **Compliance & regulatory** · Audit trails, data residency, GDPR | **Hybrid** · Global framework + local regulatory config | Immutable releases · Audit trail per version mandatory | Policy-driven · Deployed when regulation changes |
+
+---
+
+### Approach B — Repo-Driven Delivery
+
+Repo-driven delivery uses the Git repository as the single source of truth. The key decisions are where metadata lives in the repo, how branches are managed, and what triggers a deployment.
+
+| Metadata layer | Repo structure | Branch strategy | Deployment trigger |
+|---|---|---|---|
+| **Core platform** · Data model, security, base objects | `packages/core` · Single source of truth across all orgs | Trunk-based on `main` · No org-specific forks allowed | Merge to `main` · Triggers deploy to all orgs sequentially |
+| **Integration layer** · Named creds, external services, events | `packages/integration` · Tightly coupled with core | Trunk-based, pinned to API versions · Contract-first approach | After core, before org deltas · Order enforced by pipeline |
+| **Business logic** · Flows, Apex, automation, agents | `packages/logic` + `orgs/{region}/logic` · Shared base + org overrides | Feature branches → `main` · Org branches for overrides | Shared: with core cadence · Overrides: continuous per org |
+| **UI components** · LWC, Flexipages, app config | `orgs/{region}/ui` · Fully org-specific directories | Long-lived org branches · Or org-scoped dirs on `main` | Continuous delivery · Local teams push independently |
+| **Compliance & regulatory** · Audit trails, data residency, GDPR | `packages/compliance` + `orgs/{region}/` · Global framework + local config | Protected branch · Compliance team approval on every PR | Policy-driven · Deployed when regulation changes |
+
+---
+
+The two approaches are not mutually exclusive. Many enterprises use package-based delivery for shared core components (where version control and install order matter) and repo-driven delivery for org-specific extensions (where speed and local autonomy matter). This repository demonstrates primarily the repo-driven approach, but the package layering principles — core → integration → logic → org-specific — apply identically to both.
+
 ## Workflows
 
 | Workflow | Trigger | Purpose |
